@@ -1,0 +1,98 @@
+name: Autograding
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  grade:
+    name: Run Visible Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Free test port
+        run: |
+          lsof -ti:3000 | xargs kill -9 2>/dev/null || true
+
+      - name: Run API Tests
+        id: api-tests
+        continue-on-error: true
+        timeout-minutes: 5
+        run: |
+          npm test 2>&1 | tee test_output.txt
+          TEST_EXIT_CODE=${PIPESTATUS[0]}
+
+          # Extract score from output
+          SCORE=$(grep "Score:" test_output.txt | grep -o '[0-9]*' | head -1)
+          PASSED=$(grep "Results:" test_output.txt | grep -o '[0-9]* passed' | grep -o '[0-9]*')
+          FAILED=$(grep "Results:" test_output.txt | grep -o '[0-9]* failed' | grep -o '[0-9]*')
+
+          echo "score=$SCORE" >> $GITHUB_OUTPUT
+          echo "passed=$PASSED" >> $GITHUB_OUTPUT
+          echo "failed=$FAILED" >> $GITHUB_OUTPUT
+          exit $TEST_EXIT_CODE
+
+      - name: Generate Test Report
+        if: always()
+        run: |
+          echo "## Assignment 3: Task Manager - Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Score: ${{ steps.api-tests.outputs.score }}%**" >> $GITHUB_STEP_SUMMARY
+          echo "- Passed: ${{ steps.api-tests.outputs.passed }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Failed: ${{ steps.api-tests.outputs.failed }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### API Test Output" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          cat test_output.txt >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload Test Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: test_output.txt
+          retention-days: 30
+
+      - name: Create Results JSON
+        if: always()
+        run: |
+          SCORE="${{ steps.api-tests.outputs.score }}"
+          PASSED="${{ steps.api-tests.outputs.passed }}"
+          FAILED="${{ steps.api-tests.outputs.failed }}"
+          cat > test_results.json << EOF
+          {
+            "summary": {
+              "score": ${SCORE:-0},
+              "passed": ${PASSED:-0},
+              "failed": ${FAILED:-0},
+              "total": 100
+            },
+            "assignment": "assignment3-taskmanager",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          }
+          EOF
+
+      - name: Upload Results JSON
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-json
+          path: test_results.json
+
+      - name: Check Test Results
+        if: steps.api-tests.outcome == 'failure'
+        run: exit 1
